@@ -1445,6 +1445,11 @@ func updateCitizens(dt float64) {
 				g.State = "working"
 				g.Timer = 5 + rand.Float64()*10 // 5-15 seconds
 				destTile := game.Tiles[g.DestY][g.DestX]
+				// If destination is commercial with zero supplies and zero employees, citizens give up and leave city (do not add to tile)
+				if destTile.Building != nil && destTile.Building.Type == Commercial && destTile.Building.Supplies == 0 && destTile.Building.Employees == 0 {
+					// citizens leave: do not enter working state, they vanish (simulate leaving city)
+					continue
+				}
 				destTile.Citizens += g.Count
 				kept = append(kept, g)
 			} else if g.State == "return" { // final arrival origin
@@ -1547,7 +1552,7 @@ func pickZoneTypeByDemand() ZoneType {
 
 	// Base scores from raw demand values
 	rScore := d.Residential
-	cScore := d.Commercial
+	cScore := d.Commercial + 5 // +5% commercial bias
 	iScore := d.Industrial
 
 	// Penalize industrial if already high relative to unemployment (avoid overbuilding I when no workers idle)

@@ -28,6 +28,7 @@ export const Game: React.FC = () => {
   const vehicleStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const goodsICStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const goodsCCStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
+  const citizenStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const trafficTSRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
   const animRAF = useRef<number|undefined>(undefined);
@@ -70,7 +71,7 @@ export const Game: React.FC = () => {
     vehiclesRef.current = tp.vehicles;
     goodsICRef.current = tp.goodsIC||[];
     goodsCCRef.current = tp.goodsCC||[];
-    citizensRef.current = tp.citizens||[];
+  citizensRef.current = tp.citizens||[];
     trafficTSRef.current = tp.ts;
     const base = 1.05;
     function updateSet(arr:{id:number;x:number;y:number}[], map:Map<number,VehicleAnim>){
@@ -89,7 +90,8 @@ export const Game: React.FC = () => {
     }
     updateSet(tp.vehicles, vehicleStatesRef.current);
     updateSet(goodsICRef.current, goodsICStatesRef.current);
-    updateSet(goodsCCRef.current, goodsCCStatesRef.current);
+  updateSet(goodsCCRef.current, goodsCCStatesRef.current);
+  updateSet(citizensRef.current, citizenStatesRef.current);
   };
     return ()=> c.close();
   },[]);
@@ -116,7 +118,8 @@ export const Game: React.FC = () => {
       }
       advance(vehicleStatesRef.current);
       advance(goodsICStatesRef.current);
-      advance(goodsCCStatesRef.current);
+  advance(goodsCCStatesRef.current);
+  advance(citizenStatesRef.current);
       draw();
       animRAF.current = requestAnimationFrame(loop);
     }
@@ -246,12 +249,12 @@ export const Game: React.FC = () => {
       }
       ctx.restore();
     }
-    // Citizens (purple) each moving citizen group shown as single dot (can fan out later)
-    if(citizensRef.current.length){
-      ctx.save(); ctx.fillStyle = '#bb55ff';
-      for(const c of citizensRef.current){
-        const sx = (c.x - c.y) * TILE_W/2 * z + originX;
-        const sy = (c.x + c.y) * TILE_H/2 * z + originY;
+    // Citizens (black) smoothed like vehicles
+    if(citizenStatesRef.current.size){
+      ctx.save(); ctx.fillStyle = '#000';
+      for(const st of citizenStatesRef.current.values()){
+        const sx = (st.x - st.y) * TILE_W/2 * z + originX;
+        const sy = (st.x + st.y) * TILE_H/2 * z + originY;
         if(sx < -60 || sy < -60 || sx > canvas.width+60 || sy > canvas.height+60) continue;
         ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 2.5*z, 0, Math.PI*2); ctx.fill();
       }
