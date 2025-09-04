@@ -117,8 +117,36 @@ func extendRoadIfNeeded(p *Player) {
 	if p.Money < 5 {
 		return
 	}
+	// Prevent forming 2x2 solid road blocks (thickening)
+	wouldThicken := func(x, y int) bool {
+		for dx := -1; dx <= 0; dx++ {
+			for dy := -1; dy <= 0; dy++ {
+				ax, ay := x+dx, y+dy
+				if !inBounds(ax, ay) || !inBounds(ax+1, ay+1) {
+					continue
+				}
+				// corners of prospective square
+				coords := [][2]int{{ax, ay}, {ax + 1, ay}, {ax, ay + 1}, {ax + 1, ay + 1}}
+				all := true
+				for _, c := range coords {
+					tx, ty := c[0], c[1]
+					if tx == x && ty == y {
+						continue
+					} // candidate assumed road
+					if game.Tiles[ty][tx].Road == nil {
+						all = false
+						break
+					}
+				}
+				if all {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	tryPlace := func(x, y int) bool {
-		if !inBounds(x, y) {
+		if !inBounds(x, y) || wouldThicken(x, y) {
 			return false
 		}
 		t := game.Tiles[y][x]
@@ -128,7 +156,7 @@ func extendRoadIfNeeded(p *Player) {
 		if t.Road == nil && t.Zone == nil && t.Structure == nil && t.Building == nil {
 			return aiPlaceRoad(p, x, y)
 		}
-		if t.Road == nil { // bulldoze obstacle
+		if t.Road == nil { // bulldoze single obstacle
 			t.Zone = nil
 			t.Building = nil
 			t.Structure = nil
@@ -136,123 +164,115 @@ func extendRoadIfNeeded(p *Player) {
 				X int `json:"x"`
 				Y int `json:"y"`
 			}{x, y})
-			if !aiPlaceRoad(p, x, y) {
-				if game.Tiles[y][x].Road == nil {
-					game.Tiles[y][x].Road = &Road{Owner: p.ID, PlacedAt: time.Now().Unix()}
-					if game.JustRoadThisTick != nil {
-						game.JustRoadThisTick[[2]int{x, y}] = game.Tick + 2
-					}
-					announce(EventRoadPlaced, struct {
-						X    int   `json:"x"`
-						Y    int   `json:"y"`
-						Road *Road `json:"road"`
-					}{x, y, game.Tiles[y][x].Road})
-				}
-			}
-			return true
+			return aiPlaceRoad(p, x, y)
 		}
 		return false
 	}
-	const wStraight = 0.55
-	const wCurve = 0.20
+	type endpoint struct{ x, y, dx, dy int }
+	type straightSeg struct {
+		x, y  int
+		horiz bool
+	}
+	const pCurve = 0.25
+	const pBranch = 0.35 // chance to attempt a perpendicular branch instead of endpoint growth
 	attempts := aiMaxRoadAttempts
 	for attempts > 0 {
 		attempts--
-		type endpoint struct{ x, y, dx, dy int }
-		type branch struct {
-			x, y int
-			dirs [][2]int
-		}
 		endpoints := []endpoint{}
-		branches := []branch{}
+		segments := []straightSeg{}
 		for y := 0; y < game.Height; y++ {
 			for x := 0; x < game.Width; x++ {
 				t := game.Tiles[y][x]
 				if t.Road == nil {
 					continue
 				}
-				nbrs := [][2]int{}
-				if inBounds(x+1, y) && game.Tiles[y][x+1].Road != nil {
-					nbrs = append(nbrs, [2]int{1, 0})
+				rR := inBounds(x+1, y) && game.Tiles[y][x+1].Road != nil
+				rL := inBounds(x-1, y) && game.Tiles[y][x-1].Road != nil
+				rD := inBounds(x, y+1) && game.Tiles[y+1][x].Road != nil
+				rU := inBounds(x, y-1) && game.Tiles[y-1][x].Road != nil
+				cnt := 0
+				if rR {
+					cnt++
 				}
-				if inBounds(x-1, y) && game.Tiles[y][x-1].Road != nil {
-					nbrs = append(nbrs, [2]int{-1, 0})
+				if rL {
+					cnt++
 				}
-				if inBounds(x, y+1) && game.Tiles[y+1][x].Road != nil {
-					nbrs = append(nbrs, [2]int{0, 1})
+				if rD {
+					cnt++
 				}
-				if inBounds(x, y-1) && game.Tiles[y-1][x].Road != nil {
-					nbrs = append(nbrs, [2]int{0, -1})
+				if rU {
+					cnt++
 				}
-				switch len(nbrs) {
-				case 1:
-					dx, dy := -nbrs[0][0], -nbrs[0][1]
-					endpoints = append(endpoints, endpoint{x, y, dx, dy})
-				case 2:
-					a, b := nbrs[0], nbrs[1]
-					if a[0]+b[0] == 0 && a[1]+b[1] == 0 { // straight segment
-						dirs := [][2]int{}
-						if a[0] != 0 {
-							dirs = append(dirs, [2]int{0, 1}, [2]int{0, -1})
-						} else {
-							dirs = append(dirs, [2]int{1, 0}, [2]int{-1, 0})
-						}
-						branches = append(branches, branch{x, y, dirs})
+				if cnt == 1 { // endpoint
+					var dx, dy int
+					if rR {
+						dx = 1
+					}
+					if rL {
+						dx = -1
+					}
+					if rD {
+						dy = 1
+					}
+					if rU {
+						dy = -1
+					}
+					endpoints = append(endpoints, endpoint{x, y, -dx, -dy})
+				} else if cnt == 2 { // possible straight for branch
+					if rR && rL {
+						segments = append(segments, straightSeg{x, y, true})
+					}
+					if rU && rD {
+						segments = append(segments, straightSeg{x, y, false})
 					}
 				}
 			}
 		}
-		if len(endpoints) == 0 && len(branches) == 0 {
+		if len(endpoints) == 0 && len(segments) == 0 {
 			break
 		}
-		did := false
-		r := rand.Float64()
-		if r < wStraight || len(branches) == 0 {
-			if len(endpoints) > 0 {
-				ep := endpoints[rand.Intn(len(endpoints))]
-				if rand.Float64() < wCurve/(wStraight+wCurve) { // curve attempt
-					choices := [][2]int{}
-					if ep.dx != 0 {
-						choices = [][2]int{{0, 1}, {0, -1}}
-					} else {
-						choices = [][2]int{{1, 0}, {-1, 0}}
-					}
-					rand.Shuffle(len(choices), func(i, j int) { choices[i], choices[j] = choices[j], choices[i] })
-					for _, c := range choices {
-						if tryPlace(ep.x+c[0], ep.y+c[1]) {
-							did = true
-							break
-						}
-					}
-					if !did {
-						if tryPlace(ep.x+ep.dx, ep.y+ep.dy) {
-							did = true
-						}
-					}
-				} else {
-					if tryPlace(ep.x+ep.dx, ep.y+ep.dy) {
-						did = true
-					}
-				}
+		placed := false
+		// branch attempt
+		if !placed && len(segments) > 0 && rand.Float64() < pBranch {
+			s := segments[rand.Intn(len(segments))]
+			// choose ONE perpendicular direction only
+			dirs := [][2]int{}
+			if s.horiz {
+				dirs = [][2]int{{0, 1}, {0, -1}}
+			} else {
+				dirs = [][2]int{{1, 0}, {-1, 0}}
 			}
-		}
-		if !did && len(branches) > 0 {
-			b := branches[rand.Intn(len(branches))]
-			rand.Shuffle(len(b.dirs), func(i, j int) { b.dirs[i], b.dirs[j] = b.dirs[j], b.dirs[i] })
-			placed := 0
-			for _, d := range b.dirs {
-				if placed >= 2 {
+			rand.Shuffle(len(dirs), func(i, j int) { dirs[i], dirs[j] = dirs[j], dirs[i] })
+			for _, d := range dirs {
+				if tryPlace(s.x+d[0], s.y+d[1]) {
+					placed = true
 					break
 				}
-				if tryPlace(b.x+d[0], b.y+d[1]) {
-					placed++
-				}
-			}
-			if placed > 0 {
-				did = true
 			}
 		}
-		if !did {
+		// endpoint growth
+		if !placed && len(endpoints) > 0 {
+			ep := endpoints[rand.Intn(len(endpoints))]
+			if rand.Float64() < pCurve { // curve -> pick perpendicular, not both
+				var choices [][2]int
+				if ep.dx != 0 {
+					choices = [][2]int{{0, 1}, {0, -1}}
+				} else {
+					choices = [][2]int{{1, 0}, {-1, 0}}
+				}
+				rand.Shuffle(len(choices), func(i, j int) { choices[i], choices[j] = choices[j], choices[i] })
+				for _, c := range choices {
+					if tryPlace(ep.x+c[0], ep.y+c[1]) {
+						placed = true
+						break
+					}
+				}
+			}
+			if !placed { // straight
+				tryPlace(ep.x+ep.dx, ep.y+ep.dy)
+			}
+		}
+		if !placed {
 			break
 		}
 	}
