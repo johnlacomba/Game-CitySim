@@ -1,8 +1,5 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
-
-const Game: React.FC = () => {
-  return <div>Game</div>;
-};
+import { Game } from './ui/Game';
 
 createRoot(document.getElementById('root')!).render(<Game />);
