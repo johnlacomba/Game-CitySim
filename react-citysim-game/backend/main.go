@@ -1106,11 +1106,14 @@ func broadcastTraffic() {
 	for i, g := range game.GoodsCC {
 		goodsCC[i] = V{ID: g.ID, X: g.X, Y: g.Y}
 	}
-	// Citizens: include groups that are not "working" (i.e., moving outbound or returning)
-	citMoving := make([]V, 0, len(game.CitizenGroups))
+	// Citizens: include all; workers shown at destination tile center
+	citAll := make([]V, 0, len(game.CitizenGroups))
 	for _, g := range game.CitizenGroups {
-		if g.State != "working" { // in transit
-			citMoving = append(citMoving, V{ID: g.ID, X: g.X, Y: g.Y})
+		if g.State == "working" {
+			// snap to dest center for clarity
+			citAll = append(citAll, V{ID: g.ID, X: float64(g.DestX), Y: float64(g.DestY)})
+		} else {
+			citAll = append(citAll, V{ID: g.ID, X: g.X, Y: g.Y})
 		}
 	}
 	announce(EventTrafficUpdate, struct {
@@ -1119,7 +1122,7 @@ func broadcastTraffic() {
 		GoodsIC  []V   `json:"goodsIC"`
 		GoodsCC  []V   `json:"goodsCC"`
 		Citizens []V   `json:"citizens"`
-	}{time.Now().UnixNano(), out, goodsIC, goodsCC, citMoving})
+	}{time.Now().UnixNano(), out, goodsIC, goodsCC, citAll})
 }
 func roadPath(start, goal [2]int, limit int) [][2]int {
 	if start == goal {
@@ -1199,6 +1202,9 @@ type CitizenGroup struct {
 	Timer            float64 // work timer seconds
 	OriginX, OriginY int
 	DestX, DestY     int
+	// legacy fields for color & lane replaced earlier were removed; add minimal stuck tracking
+	LastX, LastY float64
+	StuckTicks   int
 }
 
 // ================= Goods Shipments =================
@@ -1389,6 +1395,79 @@ func updateCitizens(dt float64) {
 	speed := citizenSpeed * dt
 	kept := game.CitizenGroups[:0]
 	for _, g := range game.CitizenGroups {
+		// Recovery: if destination/origin lost mid-transit, redirect
+		if g.State == "outbound" || g.State == "return" {
+			originTile := game.Tiles[g.OriginY][g.OriginX]
+			destTile := game.Tiles[g.DestY][g.DestX]
+			originValid := originTile.Building != nil && originTile.Building.Final
+			destValid := destTile.Building != nil && destTile.Building.Final
+			// helper to find open residential home if both invalid
+			findOpenResidential := func() (int, int, bool) {
+				for y := 0; y < game.Height; y++ {
+					for x := 0; x < game.Width; x++ {
+						if b := game.Tiles[y][x].Building; b != nil && b.Final && b.Type == Residential && b.Residents < 10 {
+							return x, y, true
+						}
+					}
+				}
+				return 0, 0, false
+			}
+			rebuildPath := func(tx, ty int) bool {
+				cx, cy := int(g.X+0.5), int(g.Y+0.5)
+				// find road near current
+				crx, cry := cx, cy
+				if !(inBounds(crx, cry) && game.Tiles[cry][crx].Road != nil) {
+					rrx, rry, ok := adjacentRoad(cx, cy)
+					if !ok {
+						return false
+					}
+					crx, cry = rrx, rry
+				}
+				orx, ory, ok1 := adjacentRoad(tx, ty)
+				if !ok1 {
+					return false
+				}
+				p := roadPath([2]int{crx, cry}, [2]int{orx, ory}, 400)
+				if len(p) == 0 {
+					return false
+				}
+				// build full path excluding current tile coordinate
+				full := make([][2]int, 0, len(p)+1)
+				full = append(full, p...)
+				full = append(full, [2]int{tx, ty})
+				g.Path = full
+				g.PathIndex = 0
+				return true
+			}
+			if g.State == "outbound" && !destValid { // lost destination
+				if originValid { // go back home
+					if !rebuildPath(g.OriginX, g.OriginY) {
+						continue
+					}
+					g.State = "return"
+				} else { // both gone - resettle
+					nx, ny, ok := findOpenResidential()
+					if !ok {
+						continue
+					} // drop if nowhere to go
+					g.OriginX, g.OriginY = nx, ny
+					if !rebuildPath(nx, ny) {
+						continue
+					}
+					g.State = "return"
+				}
+			} else if g.State == "return" && !originValid { // lost origin while returning
+				nx, ny, ok := findOpenResidential()
+				if !ok {
+					continue
+				}
+				g.OriginX, g.OriginY = nx, ny
+				if !rebuildPath(nx, ny) {
+					continue
+				}
+			}
+		}
+		prevX, prevY := g.X, g.Y
 		if g.State == "working" {
 			g.Timer -= dt
 			if g.Timer <= 0 { // start return trip
@@ -1437,6 +1516,17 @@ func updateCitizens(dt float64) {
 					}
 					remain = 0
 				}
+			}
+		}
+		// stuck detection: if not working and has remaining path but hasn't moved for many cycles -> drop
+		if g.State != "working" && g.PathIndex < len(g.Path) {
+			if g.X == prevX && g.Y == prevY {
+				g.StuckTicks++
+			} else {
+				g.StuckTicks = 0
+			}
+			if g.StuckTicks > 40 { // ~4s real time
+				continue // do not keep
 			}
 		}
 		// arrival handling
