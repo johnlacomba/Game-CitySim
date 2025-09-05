@@ -1005,8 +1005,8 @@ func trafficLoop() {
 			spawnVehicles()
 		}
 		citizenSpawnAcc += 100 * time.Millisecond
-		if citizenSpawnAcc >= 2*time.Second { // spawn citizens every 2s
-			citizenSpawnAcc -= 2 * time.Second
+		if citizenSpawnAcc >= 200*time.Millisecond { // much faster citizen spawning
+			citizenSpawnAcc -= 200 * time.Millisecond
 			spawnCitizenGroups()
 		}
 		goodsSpawnAcc += 100 * time.Millisecond
@@ -1110,8 +1110,8 @@ func broadcastTraffic() {
 	citAll := make([]V, 0, len(game.CitizenGroups))
 	for _, g := range game.CitizenGroups {
 		if g.State == "working" {
-			// snap to dest center for clarity
-			citAll = append(citAll, V{ID: g.ID, X: float64(g.DestX), Y: float64(g.DestY)})
+			// snap to destination tile center (x+0.5,y+0.5)
+			citAll = append(citAll, V{ID: g.ID, X: float64(g.DestX) + 0.5, Y: float64(g.DestY) + 0.5})
 		} else {
 			citAll = append(citAll, V{ID: g.ID, X: g.X, Y: g.Y})
 		}
@@ -1316,11 +1316,7 @@ func spawnGoodsShipments() { // cap total
 }
 
 func spawnCitizenGroups() {
-	// limit number of active groups
-	if len(game.CitizenGroups) > 200 {
-		return
-	}
-	// collect residential and job tiles
+	// collect residential and job tiles once per call
 	res := make([][2]int, 0)
 	jobs := make([][2]int, 0)
 	for y := 0; y < game.Height; y++ {
@@ -1328,7 +1324,9 @@ func spawnCitizenGroups() {
 			t := game.Tiles[y][x]
 			if t.Building != nil && t.Building.Final {
 				if t.Building.Type == Residential {
-					res = append(res, [2]int{x, y})
+					if t.Building.Residents > 0 { // only if someone lives here
+						res = append(res, [2]int{x, y})
+					}
 				} else if t.Building.Type == Commercial || t.Building.Type == Industrial {
 					jobs = append(jobs, [2]int{x, y})
 				}
@@ -1338,12 +1336,34 @@ func spawnCitizenGroups() {
 	if len(res) == 0 || len(jobs) == 0 {
 		return
 	}
-	tries := 0
-	for tries < 3 {
-		tries++
+	// target number of concurrent movers proportionate to population (e.g., 15%)
+	pop := game.Population
+	if pop <= 0 {
+		return
+	}
+	targetActive := pop / 7 // ~14%
+	if targetActive < 20 {
+		targetActive = 20
+	}
+	active := 0
+	for _, g := range game.CitizenGroups {
+		if g.State != "working" {
+			active += g.Count
+		}
+	}
+	needed := targetActive - active
+	if needed <= 0 {
+		return
+	}
+	// spawn up to 'needed' singles this call but cap per tick burst
+	maxBurst := 8
+	if needed < maxBurst {
+		maxBurst = needed
+	}
+	for i := 0; i < maxBurst; i++ {
+		// random pair
 		r := res[rand.Intn(len(res))]
 		j := jobs[rand.Intn(len(jobs))]
-		// find adjacent road tiles
 		orx, ory, ok1 := adjacentRoad(r[0], r[1])
 		drx, dry, ok2 := adjacentRoad(j[0], j[1])
 		if !ok1 || !ok2 {
@@ -1353,24 +1373,21 @@ func spawnCitizenGroups() {
 		if len(roadPathSeg) == 0 {
 			continue
 		}
-		// build full path: origin -> road entry -> ... -> road exit -> destination
 		path := make([][2]int, 0, len(roadPathSeg)+2)
 		path = append(path, [2]int{r[0], r[1]})
 		path = append(path, roadPathSeg...)
 		path = append(path, [2]int{j[0], j[1]})
-		if len(path) < 2 {
-			continue
-		}
 		citizenSeq++
-		count := 3 + rand.Intn(6) // 3-8
+		count := 1
 		g := &CitizenGroup{ID: citizenSeq, Count: count, X: float64(path[0][0]), Y: float64(path[0][1]), Path: path[1:], State: "outbound", OriginX: r[0], OriginY: r[1], DestX: j[0], DestY: j[1]}
-		// remove citizens from origin immediately
-		game.Tiles[r[1]][r[0]].Citizens -= count
-		if game.Tiles[r[1]][r[0]].Citizens < 0 {
-			game.Tiles[r[1]][r[0]].Citizens = 0
+		// decrement origin residents only if available
+		if tile := game.Tiles[r[1]][r[0]]; tile.Citizens > 0 {
+			tile.Citizens -= 1
+			if tile.Citizens < 0 {
+				tile.Citizens = 0
+			}
 		}
 		game.CitizenGroups = append(game.CitizenGroups, g)
-		break
 	}
 }
 
