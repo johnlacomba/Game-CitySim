@@ -22,13 +22,17 @@ export const Game: React.FC = () => {
   const vehiclesRef = useRef<{id:number;x:number;y:number}[]>([]);
   const goodsICRef = useRef<{id:number;x:number;y:number}[]>([]); // yellow
   const goodsCCRef = useRef<{id:number;x:number;y:number}[]>([]); // blue
-  const citizensRef = useRef<{id:number;x:number;y:number}[]>([]); // moving citizens
+  const citizensRef = useRef<{id:number;x:number;y:number}[]>([]); // moving citizens (black)
+  const citizensBlueRef = useRef<{id:number;x:number;y:number}[]>([]); // blue return shoppers
+  const citizensYellowRef = useRef<{id:number;x:number;y:number}[]>([]); // yellow deliveries outbound
   // Per-vehicle animation state for continuous smoothing
   interface VehicleAnim { id:number; x:number; y:number; tx:number; ty:number; speed:number; }
   const vehicleStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const goodsICStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const goodsCCStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const citizenStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
+  const citizenBlueStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
+  const citizenYellowStatesRef = useRef<Map<number,VehicleAnim>>(new Map());
   const trafficTSRef = useRef<number>(0);
   const lastFrameRef = useRef<number>(0);
   const animRAF = useRef<number|undefined>(undefined);
@@ -71,7 +75,9 @@ export const Game: React.FC = () => {
     vehiclesRef.current = tp.vehicles;
     goodsICRef.current = tp.goodsIC||[];
     goodsCCRef.current = tp.goodsCC||[];
-  citizensRef.current = tp.citizens||[];
+    citizensRef.current = tp.citizens||[];
+    citizensBlueRef.current = tp.citizensRG||[];
+    citizensYellowRef.current = tp.citizensY||[];
     trafficTSRef.current = tp.ts;
     const base = 1.05;
     function updateSet(arr:{id:number;x:number;y:number}[], map:Map<number,VehicleAnim>){
@@ -79,19 +85,17 @@ export const Game: React.FC = () => {
       for(const v of arr){
         seen.add(v.id);
         const existing = map.get(v.id);
-        if(!existing){
-          map.set(v.id,{id:v.id,x:v.x,y:v.y,tx:v.x,ty:v.y,speed:0});
-        } else {
-          const dx = v.x - existing.x; const dy = v.y - existing.y; const dist = Math.hypot(dx,dy);
-          existing.tx = v.x; existing.ty = v.y; existing.speed = dist * base;
-        }
+        if(!existing){ map.set(v.id,{id:v.id,x:v.x,y:v.y,tx:v.x,ty:v.y,speed:0}); }
+        else { const dx = v.x - existing.x; const dy = v.y - existing.y; const dist = Math.hypot(dx,dy); existing.tx = v.x; existing.ty = v.y; existing.speed = dist * base; }
       }
       for(const id of Array.from(map.keys())) if(!seen.has(id)) map.delete(id);
     }
     updateSet(tp.vehicles, vehicleStatesRef.current);
     updateSet(goodsICRef.current, goodsICStatesRef.current);
-  updateSet(goodsCCRef.current, goodsCCStatesRef.current);
-  updateSet(citizensRef.current, citizenStatesRef.current);
+    updateSet(goodsCCRef.current, goodsCCStatesRef.current);
+    updateSet(citizensRef.current, citizenStatesRef.current);
+    updateSet(citizensBlueRef.current, citizenBlueStatesRef.current);
+    updateSet(citizensYellowRef.current, citizenYellowStatesRef.current);
   };
     return ()=> c.close();
   },[]);
@@ -120,6 +124,8 @@ export const Game: React.FC = () => {
       advance(goodsICStatesRef.current);
   advance(goodsCCStatesRef.current);
   advance(citizenStatesRef.current);
+      advance(citizenBlueStatesRef.current);
+      advance(citizenYellowStatesRef.current);
       draw();
       animRAF.current = requestAnimationFrame(loop);
     }
@@ -216,17 +222,7 @@ export const Game: React.FC = () => {
       }
     }
 
-    // Vehicles (now green)
-    if(vehicleStatesRef.current.size){
-      ctx.save(); ctx.fillStyle = '#33aa33';
-      for(const st of vehicleStatesRef.current.values()){
-        const sx = (st.x - st.y) * TILE_W/2 * z + originX;
-        const sy = (st.x + st.y) * TILE_H/2 * z + originY;
-        if(sx < -60 || sy < -60 || sx > canvas.width+60 || sy > canvas.height+60) continue;
-        ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 4*z, 0, Math.PI*2); ctx.fill();
-      }
-      ctx.restore();
-    }
+  // Vehicles suppressed (green dots removed per request)
     // Goods IC (yellow) smoothed
     if(goodsICStatesRef.current.size){
       ctx.save(); ctx.fillStyle = '#ffeb3b';
@@ -249,15 +245,22 @@ export const Game: React.FC = () => {
       }
       ctx.restore();
     }
-    // Citizens (black) smoothed like vehicles
+    // Citizens black
     if(citizenStatesRef.current.size){
       ctx.save(); ctx.fillStyle = '#000';
-      for(const st of citizenStatesRef.current.values()){
-        const sx = (st.x - st.y) * TILE_W/2 * z + originX;
-        const sy = (st.x + st.y) * TILE_H/2 * z + originY;
-        if(sx < -60 || sy < -60 || sx > canvas.width+60 || sy > canvas.height+60) continue;
-        ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 2.5*z, 0, Math.PI*2); ctx.fill();
-      }
+      for(const st of citizenStatesRef.current.values()){ const sx = (st.x - st.y) * TILE_W/2 * z + originX; const sy = (st.x + st.y) * TILE_H/2 * z + originY; if(sx<-60||sy<-60||sx>canvas.width+60||sy>canvas.height+60) continue; ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 2.5*z, 0, Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    }
+    // Citizens blue
+    if(citizenBlueStatesRef.current.size){
+      ctx.save(); ctx.fillStyle = '#3399ff';
+      for(const st of citizenBlueStatesRef.current.values()){ const sx = (st.x - st.y) * TILE_W/2 * z + originX; const sy = (st.x + st.y) * TILE_H/2 * z + originY; if(sx<-60||sy<-60||sx>canvas.width+60||sy>canvas.height+60) continue; ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 2.5*z, 0, Math.PI*2); ctx.fill(); }
+      ctx.restore();
+    }
+    // Citizens yellow
+    if(citizenYellowStatesRef.current.size){
+      ctx.save(); ctx.fillStyle = '#ffeb3b';
+      for(const st of citizenYellowStatesRef.current.values()){ const sx = (st.x - st.y) * TILE_W/2 * z + originX; const sy = (st.x + st.y) * TILE_H/2 * z + originY; if(sx<-60||sy<-60||sx>canvas.width+60||sy>canvas.height+60) continue; ctx.beginPath(); ctx.arc(sx, sy + (TILE_H/4)*z, 2.5*z, 0, Math.PI*2); ctx.fill(); }
       ctx.restore();
     }
   }
@@ -281,7 +284,7 @@ export const Game: React.FC = () => {
           lines.push(`Tile (${map.x},${map.y}) terrain: ${t.terrain}`);
           if(t.foliage && !t.zone && !t.building && !t.road){ lines.push(`Foliage: ${t.foliage}`); }
           if(t.zone){ lines.push(`Zone: ${t.zone.type}`); } else { lines.push('Zone: none'); }
-          if(t.road){ lines.push('Road: yes'); }
+          if(t.road){ lines.push('Road: yes'+ (t.intersection? ' (intersection)':'')); }
           if(t.building){
             const b = t.building;
             lines.push(`Building: ${b.type} stage ${b.stage}${b.final? ' (final)':''}`);
@@ -330,7 +333,11 @@ function drawTile(ctx:CanvasRenderingContext2D, x:number, y:number, z:number, ti
   ctx.fillStyle = fill; ctx.fill();
   ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke();
   if(tile.road && !tile.zone && !tile.building){
-    ctx.fillStyle = '#666';
+    if(tile.intersection){
+      ctx.fillStyle = '#888'; // lighter or distinct shade for intersection
+    } else {
+      ctx.fillStyle = '#666';
+    }
     ctx.fill();
   }
   if(tile.zone){

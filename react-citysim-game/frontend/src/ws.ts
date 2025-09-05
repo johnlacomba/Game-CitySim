@@ -7,7 +7,7 @@ export interface Demand { residential:number; commercial:number; industrial:numb
 export interface Player { id:string; name:string; money:number }
 export interface FullState { width:number; height:number; tiles:Tile[][]; demand:Demand; players:Record<string, Player>; tick:number; conn?: GameConnection }
 export interface TickSummary { tick:number; demand:Demand; population:number; employed:number }
-export interface TrafficPayload { ts:number; vehicles:{id:number;x:number;y:number}[]; goodsIC?:{id:number;x:number;y:number}[]; goodsCC?:{id:number;x:number;y:number}[]; citizens?:{id:number;x:number;y:number}[] }
+export interface TrafficPayload { ts:number; vehicles:{id:number;x:number;y:number}[]; goodsIC?:{id:number;x:number;y:number}[]; goodsCC?:{id:number;x:number;y:number}[]; citizens?:{id:number;x:number;y:number}[]; citizensRG?:{id:number;x:number;y:number}[]; citizensY?:{id:number;x:number;y:number}[] }
 export interface BuildingUpdatePayload { updates:{x:number;y:number; building:Building|null}[] }
 
 export interface ZonePlacedPayload { x:number; y:number; zone: Zone }
